@@ -78,6 +78,71 @@ internal sealed class PixivApiClient : IDisposable
         return (name!, avatarUrl);
     }
 
+    internal readonly record struct PixivArtworkData(
+        string UserId,
+        string UserName,
+        int XRestrict,
+        IReadOnlyList<(string Tag, string? Translation)> Tags);
+
+    /// <summary>
+    /// Fetches public artwork info. Returns parsed data, or null when pixiv
+    /// reports the artwork as missing (deleted/private — cacheable).
+    /// </summary>
+    public async Task<PixivArtworkData?> FetchArtworkAsync(
+        string artworkId, CancellationToken ct)
+    {
+        var url = $"https://www.pixiv.net/ajax/illust/{artworkId}?lang=en";
+        using var response = await SendWithRetryAsync(url, "application/json", ct).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false);
+        var root = doc.RootElement;
+
+        if (root.TryGetProperty("error", out var error) && error.GetBoolean())
+        {
+            _log($"pixiv artwork {artworkId}: API returned error=true");
+            return null;
+        }
+        if (!root.TryGetProperty("body", out var body) || body.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var userId = body.TryGetProperty("userId", out var uid) ? uid.GetString() : null;
+        var userName = body.TryGetProperty("userName", out var un) ? un.GetString() : null;
+        if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(userName))
+            return null;
+
+        int xRestrict = 0;
+        if (body.TryGetProperty("xRestrict", out var xr))
+            xRestrict = xr.GetInt32();
+
+        var tags = new List<(string Tag, string? Translation)>();
+        if (body.TryGetProperty("tags", out var tagsObj)
+            && tagsObj.TryGetProperty("tags", out var tagsArr)
+            && tagsArr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var tagEl in tagsArr.EnumerateArray())
+            {
+                var tagName = tagEl.TryGetProperty("tag", out var tn) ? tn.GetString() : null;
+                if (string.IsNullOrEmpty(tagName)) continue;
+
+                string? translation = null;
+                if (tagEl.TryGetProperty("translation", out var tr)
+                    && tr.ValueKind == JsonValueKind.Object
+                    && tr.TryGetProperty("en", out var en)
+                    && en.ValueKind == JsonValueKind.String)
+                {
+                    translation = en.GetString();
+                }
+                tags.Add((tagName, translation));
+            }
+        }
+
+        return new PixivArtworkData(userId!, userName!, xRestrict, tags);
+    }
+
     /// <summary>
     /// Downloads an avatar to <paramref name="destinationPath"/> (extension is
     /// appended from the URL). Writes via a temp file + move so a half-written

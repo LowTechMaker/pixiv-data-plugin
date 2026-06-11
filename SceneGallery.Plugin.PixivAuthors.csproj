@@ -11,14 +11,12 @@
 
   <ItemGroup>
     <!--
+      Reference the SDK project so plugin contracts stay in sync with the app.
       The contracts assembly must NOT be copied into the plugin's output:
       the app loads SceneGallery.PluginSdk.dll in the default load context,
       and a second copy beside the plugin would be loaded into the plugin's
       AssemblyLoadContext, breaking type identity (casts to IPlugin fail).
     -->
-    <Reference Include="SceneGallery.PluginSdk">
-      <HintPath>lib\SceneGallery.PluginSdk.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
+    <ProjectReference Include="..\KoikatsuSceneGallery\PluginSdk\SceneGallery.PluginSdk.csproj" Private="false" />
   </ItemGroup>
 </Project>

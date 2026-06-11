@@ -8,17 +8,19 @@ namespace SceneGallery.Plugin.PixivAuthors;
 /// Anonymous web requests only (no account); rate-limited and disk-cached so
 /// each author is fetched at most once until a forced refresh.
 /// </summary>
-public sealed class PixivAuthorPlugin : IFolderAuthorProvider, IDisposable
+public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvider, IDisposable
 {
     private static readonly TimeSpan MinRequestInterval = TimeSpan.FromSeconds(2);
 
     private IPluginHost? _host;
     private PixivApiClient? _client;
     private AuthorDiskCache? _cache;
+    private ArtworkDiskCache? _artworkCache;
     private string _avatarDirectory = "";
 
     // Dedupes concurrent fetches: 50 cards of one author trigger one request.
     private readonly ConcurrentDictionary<string, Lazy<Task<AuthorInfo?>>> _inFlight = new();
+    private readonly ConcurrentDictionary<string, Lazy<Task<ArtworkInfo?>>> _artworkInFlight = new();
 
     public string Name => "Pixiv Authors";
 
@@ -29,6 +31,7 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, IDisposable
         _host = host;
         _avatarDirectory = Path.Combine(host.StorageDirectory, "avatars");
         _cache = new AuthorDiskCache(host.StorageDirectory, host.Log);
+        _artworkCache = new ArtworkDiskCache(host.StorageDirectory, host.Log);
         _client = new PixivApiClient(new RateLimiter(MinRequestInterval), host.Log);
     }
 
@@ -107,9 +110,89 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, IDisposable
     // downloading it so the UI falls back to its own person glyph.
     private static bool IsDefaultAvatar(string url) => url.Contains("no_profile", StringComparison.Ordinal);
 
+    // ── ICardImportProvider ──────────────────────────────────────────
+
+    public string ProviderId => PixivFolderNameParser.ProviderId;
+
+    public ArtworkId? TryParseFilename(string fileName)
+        => PixivFilenameParser.TryParse(fileName);
+
+    public string GetArtworkUrl(ArtworkId id) => $"https://www.pixiv.net/artworks/{id.Id}";
+
+    public Task<ArtworkInfo?> FetchArtworkInfoAsync(ArtworkId id, CancellationToken ct)
+    {
+        if (_client is null || _artworkCache is null || id.ProviderId != ProviderId)
+            return Task.FromResult<ArtworkInfo?>(null);
+
+        if (_artworkCache.TryGet(id.Id, out var cached))
+            return Task.FromResult(ToArtworkInfo(id, cached));
+
+        var lazy = _artworkInFlight.GetOrAdd(id.Id, _ => new Lazy<Task<ArtworkInfo?>>(
+            () => FetchAndCacheArtworkAsync(id, ct)));
+        return lazy.Value;
+    }
+
+    private async Task<ArtworkInfo?> FetchAndCacheArtworkAsync(ArtworkId id, CancellationToken ct)
+    {
+        try
+        {
+            var data = await _client!.FetchArtworkAsync(id.Id, ct).ConfigureAwait(false);
+            if (data is null)
+            {
+                _artworkCache!.Set(id.Id, new ArtworkDiskCache.CachedArtwork(
+                    null, null, 0, null, DateTimeOffset.UtcNow, Failed: true));
+                return null;
+            }
+
+            var tags = data.Value.Tags
+                .Select(t => new ArtworkDiskCache.CachedTag(t.Tag, t.Translation))
+                .ToList();
+
+            var entry = new ArtworkDiskCache.CachedArtwork(
+                data.Value.UserName, data.Value.UserId, data.Value.XRestrict,
+                tags, DateTimeOffset.UtcNow, Failed: false);
+            _artworkCache!.Set(id.Id, entry);
+            return ToArtworkInfo(id, entry);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _host?.Log($"fetch failed for pixiv artwork {id.Id}: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            _artworkInFlight.TryRemove(id.Id, out _);
+        }
+    }
+
+    private static ArtworkInfo? ToArtworkInfo(ArtworkId id, ArtworkDiskCache.CachedArtwork entry)
+    {
+        if (entry.Failed || entry.AuthorName is null || entry.AuthorId is null)
+            return null;
+
+        var tags = entry.Tags?
+            .Select(t => new ArtworkTag(t.Name, t.TranslatedName))
+            .ToList() as IReadOnlyList<ArtworkTag>
+            ?? [];
+
+        var rating = entry.XRestrict switch
+        {
+            1 => ContentRating.R18,
+            2 => ContentRating.R18G,
+            _ => ContentRating.AllAges,
+        };
+
+        return new ArtworkInfo(id, entry.AuthorName, entry.AuthorId, rating, tags, entry.FetchedAt);
+    }
+
     public void Dispose()
     {
         _cache?.Dispose();
+        _artworkCache?.Dispose();
         _client?.Dispose();
     }
 }
