@@ -10,7 +10,7 @@
     <SceneGalleryAppDir Condition="'$(SceneGalleryAppDir)' == ''">$(MSBuildThisFileDirectory)..\KoikatsuSceneGallery</SceneGalleryAppDir>
   </PropertyGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="Exists('$(SceneGalleryAppDir)\PluginSdk\SceneGallery.PluginSdk.csproj')">
     <!--
       Reference the SDK project so plugin contracts stay in sync with the app.
       The contracts assembly must NOT be copied into the plugin's output:
@@ -19,6 +19,13 @@
       AssemblyLoadContext, breaking type identity (casts to IPlugin fail).
     -->
     <ProjectReference Include="$(SceneGalleryAppDir)\PluginSdk\SceneGallery.PluginSdk.csproj" Private="false" />
+  </ItemGroup>
+
+  <!-- Fallback: use pre-built SDK DLL when the app project is not available (CI / standalone build) -->
+  <ItemGroup Condition="!Exists('$(SceneGalleryAppDir)\PluginSdk\SceneGallery.PluginSdk.csproj')">
+    <Reference Include="SceneGallery.PluginSdk" Private="false">
+      <HintPath>lib\SceneGallery.PluginSdk.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
   <!--
@@ -31,7 +38,7 @@
     <AppPluginsDir>$(SceneGalleryAppDir)\bin\$(Configuration)\net10.0-windows10.0.26100.0\$(AppRid)\Plugins\PixivAuthors</AppPluginsDir>
   </PropertyGroup>
 
-  <Target Name="CopyToAppPlugins" AfterTargets="Build">
+  <Target Name="CopyToAppPlugins" AfterTargets="Build" Condition="Exists('$(SceneGalleryAppDir)')">
     <Message Text="Plugin → $(AppPluginsDir)" Importance="high" />
     <ItemGroup>
       <_PluginFiles Include="$(OutDir)**\*" Exclude="$(OutDir)**\SceneGallery.PluginSdk.*" />
