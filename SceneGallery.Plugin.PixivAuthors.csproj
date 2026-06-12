@@ -7,6 +7,7 @@
     <!-- Produces a deps.json and copy-local dependencies so the app's
          AssemblyDependencyResolver can resolve this plugin's references. -->
     <EnableDynamicLoading>true</EnableDynamicLoading>
+    <SceneGalleryAppDir Condition="'$(SceneGalleryAppDir)' == ''">$(MSBuildThisFileDirectory)..\KoikatsuSceneGallery</SceneGalleryAppDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,6 +18,28 @@
       and a second copy beside the plugin would be loaded into the plugin's
       AssemblyLoadContext, breaking type identity (casts to IPlugin fail).
     -->
-    <ProjectReference Include="..\KoikatsuSceneGallery\PluginSdk\SceneGallery.PluginSdk.csproj" Private="false" />
+    <ProjectReference Include="$(SceneGalleryAppDir)\PluginSdk\SceneGallery.PluginSdk.csproj" Private="false" />
   </ItemGroup>
+
+  <!--
+    After each build, copy the plugin output into the app's Plugins\PixivAuthors\
+    folder so the app picks it up automatically without a manual copy step.
+    Override AppRid on the command line if your machine is not win-x64.
+  -->
+  <PropertyGroup>
+    <AppRid Condition="'$(AppRid)' == ''">win-x64</AppRid>
+    <AppPluginsDir>$(SceneGalleryAppDir)\bin\$(Configuration)\net10.0-windows10.0.26100.0\$(AppRid)\Plugins\PixivAuthors</AppPluginsDir>
+  </PropertyGroup>
+
+  <Target Name="CopyToAppPlugins" AfterTargets="Build">
+    <Message Text="Plugin → $(AppPluginsDir)" Importance="high" />
+    <ItemGroup>
+      <_PluginFiles Include="$(OutDir)**\*" Exclude="$(OutDir)**\SceneGallery.PluginSdk.*" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(_PluginFiles)"
+      DestinationFolder="$(AppPluginsDir)\%(RecursiveDir)"
+      SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

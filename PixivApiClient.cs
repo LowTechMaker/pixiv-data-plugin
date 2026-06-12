@@ -81,6 +81,8 @@ internal sealed class PixivApiClient : IDisposable
     internal readonly record struct PixivArtworkData(
         string UserId,
         string UserName,
+        string? Title,
+        string? Description,
         int XRestrict,
         IReadOnlyList<(string Tag, string? Translation)> Tags);
 
@@ -114,6 +116,12 @@ internal sealed class PixivApiClient : IDisposable
         if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(userName))
             return null;
 
+        string? title = body.TryGetProperty("title", out var t) && t.ValueKind == JsonValueKind.String
+            ? t.GetString() : null;
+
+        string? description = body.TryGetProperty("description", out var desc) && desc.ValueKind == JsonValueKind.String
+            ? desc.GetString() : null;
+
         int xRestrict = 0;
         if (body.TryGetProperty("xRestrict", out var xr))
             xRestrict = xr.GetInt32();
@@ -140,7 +148,7 @@ internal sealed class PixivApiClient : IDisposable
             }
         }
 
-        return new PixivArtworkData(userId!, userName!, xRestrict, tags);
+        return new PixivArtworkData(userId!, userName!, title, description, xRestrict, tags);
     }
 
     /// <summary>

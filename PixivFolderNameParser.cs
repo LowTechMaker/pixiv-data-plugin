@@ -23,6 +23,12 @@ public static partial class PixivFolderNameParser
     [GeneratedRegex(@"^(?<name>.+?)[ _\-]+(?<id>\d{6,12})$", RegexOptions.CultureInvariant)]
     private static partial Regex SuffixForm();
 
+    // Pure numeric folder — gallery-dl can be configured to use only the user
+    // id as the directory name (e.g. "80920098"). Require 4+ digits to avoid
+    // treating short unrelated folder names as pixiv ids.
+    [GeneratedRegex(@"^(?<id>\d{4,12})$", RegexOptions.CultureInvariant)]
+    private static partial Regex NumericForm();
+
     public static ParsedAuthor? TryParse(string folderName)
     {
         if (string.IsNullOrWhiteSpace(folderName)) return null;
@@ -30,6 +36,8 @@ public static partial class PixivFolderNameParser
         var match = BracketedForm().Match(folderName);
         if (!match.Success)
             match = SuffixForm().Match(folderName);
+        if (!match.Success)
+            match = NumericForm().Match(folderName);
         if (!match.Success) return null;
 
         var id = match.Groups["id"].Value.TrimStart('0');

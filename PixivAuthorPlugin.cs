@@ -11,6 +11,7 @@ namespace SceneGallery.Plugin.PixivAuthors;
 public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvider, IDisposable
 {
     private static readonly TimeSpan MinRequestInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan MaxJitter = TimeSpan.FromSeconds(3);
 
     private IPluginHost? _host;
     private PixivApiClient? _client;
@@ -21,6 +22,7 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
     // Dedupes concurrent fetches: 50 cards of one author trigger one request.
     private readonly ConcurrentDictionary<string, Lazy<Task<AuthorInfo?>>> _inFlight = new();
     private readonly ConcurrentDictionary<string, Lazy<Task<ArtworkInfo?>>> _artworkInFlight = new();
+    private readonly ConcurrentDictionary<string, ArtworkDiskCache.CachedArtwork> _unsavedArtworkDetails = new();
 
     public string Name => "Pixiv Authors";
 
@@ -32,7 +34,7 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
         _avatarDirectory = Path.Combine(host.StorageDirectory, "avatars");
         _cache = new AuthorDiskCache(host.StorageDirectory, host.Log);
         _artworkCache = new ArtworkDiskCache(host.StorageDirectory, host.Log);
-        _client = new PixivApiClient(new RateLimiter(MinRequestInterval), host.Log);
+        _client = new PixivApiClient(new RateLimiter(MinRequestInterval, MaxJitter), host.Log);
     }
 
     public ParsedAuthor? TryParseFolderName(string folderName)
@@ -117,30 +119,55 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
     public ArtworkId? TryParseFilename(string fileName)
         => PixivFilenameParser.TryParse(fileName);
 
+    public ArtworkId? TryParseArtworkFolderName(string folderName)
+    {
+        var parsed = PixivFolderNameParser.TryParse(folderName);
+        if (parsed is null) return null;
+        return new ArtworkId(ProviderId, parsed.Key.Id);
+    }
+
     public string GetArtworkUrl(ArtworkId id) => $"https://www.pixiv.net/artworks/{id.Id}";
 
-    public Task<ArtworkInfo?> FetchArtworkInfoAsync(ArtworkId id, CancellationToken ct)
+    public Task<ArtworkInfo?> FetchArtworkInfoAsync(
+        ArtworkId id,
+        CancellationToken ct,
+        bool saveToLocalCache = true)
     {
         if (_client is null || _artworkCache is null || id.ProviderId != ProviderId)
             return Task.FromResult<ArtworkInfo?>(null);
 
-        if (_artworkCache.TryGet(id.Id, out var cached))
-            return Task.FromResult(ToArtworkInfo(id, cached));
+        // Title was added after initial release; old cache entries have Title == null.
+        // Re-fetch those so the artwork subfolder feature works correctly.
+        if (_artworkCache.TryGet(id.Id, out var cached) && (cached.Failed || cached.Title != null))
+            return Task.FromResult(ToArtworkInfo(id, cached, isSavedLocally: true));
 
-        var lazy = _artworkInFlight.GetOrAdd(id.Id, _ => new Lazy<Task<ArtworkInfo?>>(
-            () => FetchAndCacheArtworkAsync(id, ct)));
+        if (saveToLocalCache && _unsavedArtworkDetails.TryRemove(id.Id, out var unsaved))
+        {
+            _artworkCache.Set(id.Id, unsaved);
+            return Task.FromResult(ToArtworkInfo(id, unsaved, isSavedLocally: true));
+        }
+
+        var inFlightKey = $"{id.Id}:{saveToLocalCache}";
+        var lazy = _artworkInFlight.GetOrAdd(inFlightKey, _ => new Lazy<Task<ArtworkInfo?>>(
+            () => FetchArtworkAsync(id, saveToLocalCache, ct)));
         return lazy.Value;
     }
 
-    private async Task<ArtworkInfo?> FetchAndCacheArtworkAsync(ArtworkId id, CancellationToken ct)
+    private async Task<ArtworkInfo?> FetchArtworkAsync(
+        ArtworkId id,
+        bool saveToLocalCache,
+        CancellationToken ct)
     {
         try
         {
             var data = await _client!.FetchArtworkAsync(id.Id, ct).ConfigureAwait(false);
             if (data is null)
             {
-                _artworkCache!.Set(id.Id, new ArtworkDiskCache.CachedArtwork(
-                    null, null, 0, null, DateTimeOffset.UtcNow, Failed: true));
+                if (saveToLocalCache)
+                {
+                    _artworkCache!.Set(id.Id, new ArtworkDiskCache.CachedArtwork(
+                        null, null, null, null, 0, null, DateTimeOffset.UtcNow, Failed: true));
+                }
                 return null;
             }
 
@@ -149,10 +176,18 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
                 .ToList();
 
             var entry = new ArtworkDiskCache.CachedArtwork(
-                data.Value.UserName, data.Value.UserId, data.Value.XRestrict,
-                tags, DateTimeOffset.UtcNow, Failed: false);
-            _artworkCache!.Set(id.Id, entry);
-            return ToArtworkInfo(id, entry);
+                data.Value.UserName, data.Value.UserId, data.Value.Title, data.Value.Description,
+                data.Value.XRestrict, tags, DateTimeOffset.UtcNow, Failed: false);
+            if (saveToLocalCache)
+            {
+                _artworkCache!.Set(id.Id, entry);
+                _unsavedArtworkDetails.TryRemove(id.Id, out _);
+            }
+            else
+            {
+                _unsavedArtworkDetails[id.Id] = entry;
+            }
+            return ToArtworkInfo(id, entry, saveToLocalCache);
         }
         catch (OperationCanceledException)
         {
@@ -165,11 +200,14 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
         }
         finally
         {
-            _artworkInFlight.TryRemove(id.Id, out _);
+            _artworkInFlight.TryRemove($"{id.Id}:{saveToLocalCache}", out _);
         }
     }
 
-    private static ArtworkInfo? ToArtworkInfo(ArtworkId id, ArtworkDiskCache.CachedArtwork entry)
+    private static ArtworkInfo? ToArtworkInfo(
+        ArtworkId id,
+        ArtworkDiskCache.CachedArtwork entry,
+        bool isSavedLocally)
     {
         if (entry.Failed || entry.AuthorName is null || entry.AuthorId is null)
             return null;
@@ -186,7 +224,16 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
             _ => ContentRating.AllAges,
         };
 
-        return new ArtworkInfo(id, entry.AuthorName, entry.AuthorId, rating, tags, entry.FetchedAt);
+        return new ArtworkInfo(
+            id,
+            entry.AuthorName,
+            entry.AuthorId,
+            entry.Title,
+            entry.Description,
+            rating,
+            tags,
+            entry.FetchedAt,
+            isSavedLocally);
     }
 
     public void Dispose()

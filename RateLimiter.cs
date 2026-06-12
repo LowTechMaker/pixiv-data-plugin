@@ -7,7 +7,7 @@ namespace SceneGallery.Plugin.PixivAuthors;
 /// requests. Every request — JSON and avatar downloads alike — must pass
 /// through this so the plugin can never burst-traffic pixiv.
 /// </summary>
-internal sealed class RateLimiter(TimeSpan minInterval)
+internal sealed class RateLimiter(TimeSpan minInterval, TimeSpan maxJitter = default)
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private long _lastRequestTimestamp;
@@ -21,7 +21,10 @@ internal sealed class RateLimiter(TimeSpan minInterval)
             if (last != 0)
             {
                 var elapsed = Stopwatch.GetElapsedTime(last);
-                var remaining = minInterval - elapsed;
+                var jitter = maxJitter > TimeSpan.Zero
+                    ? TimeSpan.FromMilliseconds(Random.Shared.Next((int)maxJitter.TotalMilliseconds))
+                    : TimeSpan.Zero;
+                var remaining = minInterval + jitter - elapsed;
                 if (remaining > TimeSpan.Zero)
                     await Task.Delay(remaining, ct).ConfigureAwait(false);
             }

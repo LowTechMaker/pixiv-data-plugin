@@ -15,6 +15,8 @@ internal sealed class ArtworkDiskCache : IDisposable
     public sealed record CachedArtwork(
         string? AuthorName,
         string? AuthorId,
+        string? Title,
+        string? Description,
         int XRestrict,
         IReadOnlyList<CachedTag>? Tags,
         DateTimeOffset FetchedAt,
