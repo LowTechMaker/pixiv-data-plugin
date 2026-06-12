@@ -8,13 +8,14 @@ namespace SceneGallery.Plugin.PixivAuthors;
 /// Anonymous web requests only (no account); rate-limited and disk-cached so
 /// each author is fetched at most once until a forced refresh.
 /// </summary>
-public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvider, IDisposable
+public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvider, IReverseImageSearchProvider, IDisposable
 {
     private static readonly TimeSpan MinRequestInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan MaxJitter = TimeSpan.FromSeconds(3);
 
     private IPluginHost? _host;
     private PixivApiClient? _client;
+    private SauceNaoClient? _sauceNaoClient;
     private AuthorDiskCache? _cache;
     private ArtworkDiskCache? _artworkCache;
     private string _avatarDirectory = "";
@@ -35,6 +36,7 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
         _cache = new AuthorDiskCache(host.StorageDirectory, host.Log);
         _artworkCache = new ArtworkDiskCache(host.StorageDirectory, host.Log);
         _client = new PixivApiClient(new RateLimiter(MinRequestInterval, MaxJitter), host.Log);
+        _sauceNaoClient = new SauceNaoClient(new RateLimiter(MinRequestInterval, MaxJitter), host.Log);
     }
 
     public ParsedAuthor? TryParseFolderName(string folderName)
@@ -127,6 +129,41 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
     }
 
     public string GetArtworkUrl(ArtworkId id) => $"https://www.pixiv.net/artworks/{id.Id}";
+
+    public async Task<ReverseImageSearchResult?> SearchImageAsync(
+        string imagePath,
+        string apiKey,
+        CancellationToken ct)
+    {
+        if (_sauceNaoClient is null)
+            return null;
+
+        try
+        {
+            var result = await _sauceNaoClient.SearchPixivAsync(imagePath, apiKey, ct).ConfigureAwait(false);
+            if (result is null)
+                return null;
+
+            return new ReverseImageSearchResult(
+                "SauceNao",
+                new ArtworkId(ProviderId, result.PixivId),
+                result.Title,
+                result.AuthorName,
+                result.AuthorId,
+                result.Similarity,
+                result.ThumbnailUrl,
+                result.SourceUrl);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _host?.Log($"SauceNao search failed for {Path.GetFileName(imagePath)}: {ex.Message}");
+            return null;
+        }
+    }
 
     public Task<ArtworkInfo?> FetchArtworkInfoAsync(
         ArtworkId id,
@@ -241,5 +278,6 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
         _cache?.Dispose();
         _artworkCache?.Dispose();
         _client?.Dispose();
+        _sauceNaoClient?.Dispose();
     }
 }
