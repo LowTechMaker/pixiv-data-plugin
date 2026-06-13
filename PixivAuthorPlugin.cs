@@ -8,7 +8,7 @@ namespace SceneGallery.Plugin.PixivAuthors;
 /// Anonymous web requests only (no account); rate-limited and disk-cached so
 /// each author is fetched at most once until a forced refresh.
 /// </summary>
-public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvider, IReverseImageSearchProvider, IDisposable
+public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvider, IImportDestinationProvider, IReverseImageSearchProvider, IDisposable
 {
     private static readonly TimeSpan MinRequestInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan MaxJitter = TimeSpan.FromSeconds(3);
@@ -117,6 +117,10 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
     // ── ICardImportProvider ──────────────────────────────────────────
 
     public string ProviderId => PixivFolderNameParser.ProviderId;
+
+    public string DestinationFolderName => "Pixiv";
+
+    public bool UsesRatingFolders => true;
 
     public ArtworkId? TryParseFilename(string fileName)
         => PixivFilenameParser.TryParse(fileName);
