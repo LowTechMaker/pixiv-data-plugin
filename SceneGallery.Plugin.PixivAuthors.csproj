@@ -7,6 +7,7 @@
     <!-- Produces a deps.json and copy-local dependencies so the app's
          AssemblyDependencyResolver can resolve this plugin's references. -->
     <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Version>1.0.0</Version>
     <SceneGalleryAppDir Condition="'$(SceneGalleryAppDir)' == ''">$(MSBuildThisFileDirectory)..\KoikatsuSceneGallery</SceneGalleryAppDir>
   </PropertyGroup>
 
@@ -39,13 +40,26 @@
   </PropertyGroup>
 
   <Target Name="CopyToAppPlugins" AfterTargets="Build" Condition="Exists('$(SceneGalleryAppDir)')">
-    <Message Text="Plugin → $(AppPluginsDir)" Importance="high" />
+    <Message Text="Plugin (folder) → $(AppPluginsDir)" Importance="high" />
     <ItemGroup>
       <_PluginFiles Include="$(OutDir)**\*" Exclude="$(OutDir)**\SceneGallery.PluginSdk.*" />
     </ItemGroup>
     <Copy
       SourceFiles="@(_PluginFiles)"
       DestinationFolder="$(AppPluginsDir)\%(RecursiveDir)"
+      SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Single-file deployment: copy just the DLL into the Plugins root -->
+  <PropertyGroup>
+    <AppPluginsRoot>$(SceneGalleryAppDir)\bin\$(Configuration)\net10.0-windows10.0.26100.0\$(AppRid)\Plugins</AppPluginsRoot>
+  </PropertyGroup>
+
+  <Target Name="CopySingleFilePlugin" AfterTargets="Build" Condition="Exists('$(SceneGalleryAppDir)')">
+    <Message Text="Plugin (single) → $(AppPluginsRoot)\$(AssemblyName).dll" Importance="high" />
+    <Copy
+      SourceFiles="$(OutDir)$(AssemblyName).dll"
+      DestinationFolder="$(AppPluginsRoot)"
       SkipUnchangedFiles="true" />
   </Target>
 

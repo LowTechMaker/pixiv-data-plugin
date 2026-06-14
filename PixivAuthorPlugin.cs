@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using SceneGallery.PluginSdk;
+
+[assembly: AssemblyMetadata("PluginDescription", "Resolves Pixiv author info, artwork metadata, and reverse image search")]
 
 namespace SceneGallery.Plugin.PixivAuthors;
 
