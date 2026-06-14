@@ -11,7 +11,7 @@ namespace SceneGallery.Plugin.PixivAuthors;
 /// Anonymous web requests only (no account); rate-limited and disk-cached so
 /// each author is fetched at most once until a forced refresh.
 /// </summary>
-public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvider, IImportDestinationProvider, IReverseImageSearchProvider, IDisposable
+public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvider, IImportDestinationProvider, IReverseImageSearchProvider, IPluginSettingsProvider, IDisposable
 {
     private static readonly TimeSpan MinRequestInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan MaxJitter = TimeSpan.FromSeconds(3);
@@ -21,6 +21,7 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
     private SauceNaoClient? _sauceNaoClient;
     private AuthorDiskCache? _cache;
     private ArtworkDiskCache? _artworkCache;
+    private PluginSettings? _settings;
     private string _avatarDirectory = "";
 
     // Dedupes concurrent fetches: 50 cards of one author trigger one request.
@@ -32,12 +33,34 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
 
     public string Version => typeof(PixivAuthorPlugin).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
 
+    public IReadOnlyList<PluginSettingDefinition> Settings { get; } =
+    [
+        new(
+            "destinationFolderName",
+            "Destination folder",
+            "Folder inserted below the organized import subfolder. Leave empty to skip the provider folder.",
+            PluginSettingValueType.Text,
+            "Pixiv"),
+        new(
+            "usesRatingFolders",
+            "Use rating folders",
+            "Split Pixiv imports into G / R-18 / R-18G folders.",
+            PluginSettingValueType.Boolean,
+            "True"),
+        new(
+            "sauceNaoApiKey",
+            "SauceNao API key",
+            "Used by Pixiv reverse image search on the import page.",
+            PluginSettingValueType.Secret),
+    ];
+
     public void Initialize(IPluginHost host)
     {
         _host = host;
         _avatarDirectory = Path.Combine(host.StorageDirectory, "avatars");
         _cache = new AuthorDiskCache(host.StorageDirectory, host.Log);
         _artworkCache = new ArtworkDiskCache(host.StorageDirectory, host.Log);
+        _settings = PluginSettings.Load(host.StorageDirectory, host.Log);
         _client = new PixivApiClient(new RateLimiter(MinRequestInterval, MaxJitter), host.Log);
         _sauceNaoClient = new SauceNaoClient(new RateLimiter(MinRequestInterval, MaxJitter), host.Log);
     }
@@ -121,9 +144,38 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
 
     public string ProviderId => PixivFolderNameParser.ProviderId;
 
-    public string DestinationFolderName => "Pixiv";
+    public string DestinationFolderName => _settings?.DestinationFolderName ?? "Pixiv";
 
-    public bool UsesRatingFolders => true;
+    public bool UsesRatingFolders => _settings?.UsesRatingFolders ?? true;
+
+    public string? GetSettingValue(string key) => key switch
+    {
+        "destinationFolderName" => DestinationFolderName,
+        "usesRatingFolders" => UsesRatingFolders.ToString(),
+        "sauceNaoApiKey" => _settings?.SauceNaoApiKey,
+        _ => null,
+    };
+
+    public void SetSettingValue(string key, string? value)
+    {
+        if (_host is null || _settings is null)
+            return;
+
+        switch (key)
+        {
+            case "destinationFolderName":
+                _settings.DestinationFolderName = value?.Trim() ?? "";
+                break;
+            case "usesRatingFolders":
+                _settings.UsesRatingFolders = bool.TryParse(value, out var usesRatingFolders) && usesRatingFolders;
+                break;
+            case "sauceNaoApiKey":
+                _settings.SauceNaoApiKey = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+                break;
+        }
+
+        _settings.Save(_host.StorageDirectory, _host.Log);
+    }
 
     public ArtworkId? TryParseFilename(string fileName)
         => PixivFilenameParser.TryParse(fileName);
