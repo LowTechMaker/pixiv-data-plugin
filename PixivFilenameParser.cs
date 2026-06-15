@@ -16,11 +16,27 @@ public static partial class PixivFilenameParser
     [GeneratedRegex(@"^(?:\d{1,5}_)?(?<id>\d{6,12})(?:_|-)", RegexOptions.CultureInvariant)]
     private static partial Regex ArtworkFilename();
 
+    [GeneratedRegex(@"pixiv\.net/(?:[a-z]{2}/)?artworks/(?<id>\d+)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex ArtworkUrl();
+
     public static ArtworkId? TryParse(string fileName)
     {
         if (string.IsNullOrWhiteSpace(fileName)) return null;
 
         var match = ArtworkFilename().Match(fileName);
+        if (!match.Success) return null;
+
+        var id = match.Groups["id"].Value.TrimStart('0');
+        if (id.Length == 0) return null;
+
+        return new ArtworkId(PixivFolderNameParser.ProviderId, id);
+    }
+
+    public static ArtworkId? TryParseUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+
+        var match = ArtworkUrl().Match(url);
         if (!match.Success) return null;
 
         var id = match.Groups["id"].Value.TrimStart('0');

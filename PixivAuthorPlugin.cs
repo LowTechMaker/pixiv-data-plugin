@@ -180,6 +180,9 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
     public ArtworkId? TryParseFilename(string fileName)
         => PixivFilenameParser.TryParse(fileName);
 
+    public ArtworkId? TryParseUrl(string url)
+        => PixivFilenameParser.TryParseUrl(url);
+
     public ArtworkId? TryParseArtworkFolderName(string folderName)
     {
         var parsed = PixivFolderNameParser.TryParse(folderName);
