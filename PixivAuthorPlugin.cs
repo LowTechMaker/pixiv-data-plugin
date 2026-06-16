@@ -3,6 +3,7 @@ using System.Reflection;
 using SceneGallery.PluginSdk;
 
 [assembly: AssemblyMetadata("PluginDescription", "Resolves Pixiv author info, artwork metadata, and reverse image search")]
+[assembly: AssemblyMetadata("PluginUpdateUrl", "https://github.com/LowTechMaker/pixiv-data-plugin")]
 
 namespace SceneGallery.Plugin.PixivAuthors;
 
