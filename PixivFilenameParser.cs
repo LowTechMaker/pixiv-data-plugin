@@ -16,9 +16,6 @@ public static partial class PixivFilenameParser
     [GeneratedRegex(@"^(?:\d{1,5}_)?(?<id>\d{6,12})(?:_|-)", RegexOptions.CultureInvariant)]
     private static partial Regex ArtworkFilename();
 
-    [GeneratedRegex(@"pixiv\.net/(?:[a-z]{2}/)?artworks/(?<id>\d+)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
-    private static partial Regex ArtworkUrl();
-
     public static ArtworkId? TryParse(string fileName)
     {
         if (string.IsNullOrWhiteSpace(fileName)) return null;
@@ -36,12 +33,57 @@ public static partial class PixivFilenameParser
     {
         if (string.IsNullOrWhiteSpace(url)) return null;
 
-        var match = ArtworkUrl().Match(url);
-        if (!match.Success) return null;
+        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri)
+            || uri.Scheme is not ("http" or "https")
+            || !IsPixivHost(uri.Host))
+        {
+            return null;
+        }
 
-        var id = match.Groups["id"].Value.TrimStart('0');
-        if (id.Length == 0) return null;
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Select(Uri.UnescapeDataString)
+            .ToArray();
 
-        return new ArtworkId(PixivFolderNameParser.ProviderId, id);
+        var artworksIndex = Array.FindIndex(segments, s => string.Equals(s, "artworks", StringComparison.OrdinalIgnoreCase));
+        if (artworksIndex >= 0 && artworksIndex + 1 < segments.Length)
+            return CreateArtworkId(segments[artworksIndex + 1]);
+
+        var shortIndex = Array.FindIndex(segments, s => string.Equals(s, "i", StringComparison.OrdinalIgnoreCase));
+        if (shortIndex >= 0 && shortIndex + 1 < segments.Length)
+            return CreateArtworkId(segments[shortIndex + 1]);
+
+        return CreateArtworkId(GetQueryValue(uri.Query, "illust_id"));
+    }
+
+    private static bool IsPixivHost(string host) =>
+        string.Equals(host, "pixiv.net", StringComparison.OrdinalIgnoreCase)
+        || host.EndsWith(".pixiv.net", StringComparison.OrdinalIgnoreCase);
+
+    private static string? GetQueryValue(string query, string key)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return null;
+
+        foreach (var pair in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = pair.Split('=', 2);
+            var name = Uri.UnescapeDataString(parts[0]);
+            if (!string.Equals(name, key, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            return parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : "";
+        }
+
+        return null;
+    }
+
+    private static ArtworkId? CreateArtworkId(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+
+        var id = value.Trim();
+        if (!id.All(char.IsDigit)) return null;
+
+        id = id.TrimStart('0');
+        return id.Length == 0 ? null : new ArtworkId(PixivFolderNameParser.ProviderId, id);
     }
 }
