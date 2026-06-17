@@ -7,7 +7,7 @@
     <!-- Produces a deps.json and copy-local dependencies so the app's
          AssemblyDependencyResolver can resolve this plugin's references. -->
     <EnableDynamicLoading>true</EnableDynamicLoading>
-    <Version>1.0.0</Version>
+    <Version>0.0.4</Version>
     <SceneGalleryAppDir Condition="'$(SceneGalleryAppDir)' == ''">$(MSBuildThisFileDirectory)..\KoikatsuSceneGallery</SceneGalleryAppDir>
   </PropertyGroup>
 
