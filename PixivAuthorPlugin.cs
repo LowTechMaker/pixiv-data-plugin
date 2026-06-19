@@ -238,7 +238,7 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
 
         // Title was added after initial release; old cache entries have Title == null.
         // Re-fetch those so the artwork subfolder feature works correctly.
-        if (_artworkCache.TryGet(id.Id, out var cached) && (cached.Failed || cached.Title != null))
+        if (_artworkCache.TryGet(id.Id, out var cached) && cached.Title != null)
             return Task.FromResult(ToArtworkInfo(id, cached, isSavedLocally: true));
 
         if (saveToLocalCache && _unsavedArtworkDetails.TryRemove(id.Id, out var unsaved))
@@ -262,14 +262,7 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
         {
             var data = await _client!.FetchArtworkAsync(id.Id, ct).ConfigureAwait(false);
             if (data is null)
-            {
-                if (saveToLocalCache)
-                {
-                    _artworkCache!.Set(id.Id, new ArtworkDiskCache.CachedArtwork(
-                        null, null, null, null, 0, null, DateTimeOffset.UtcNow, Failed: true));
-                }
                 return null;
-            }
 
             var tags = data.Value.Tags
                 .Select(t => new ArtworkDiskCache.CachedTag(t.Tag, t.Translation))
