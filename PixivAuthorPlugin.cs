@@ -57,13 +57,20 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
 
     public void Initialize(IPluginHost host)
     {
+        InitializeForTests(
+            host,
+            new PixivApiClient(new RateLimiter(MinRequestInterval, MaxJitter), host.Log));
+        _sauceNaoClient = new SauceNaoClient(new RateLimiter(MinRequestInterval, MaxJitter), host.Log);
+    }
+
+    internal void InitializeForTests(IPluginHost host, PixivApiClient client)
+    {
         _host = host;
         _avatarDirectory = Path.Combine(host.StorageDirectory, "avatars");
         _cache = new AuthorDiskCache(host.StorageDirectory, host.Log);
         _artworkCache = new ArtworkDiskCache(host.StorageDirectory, host.Log);
         _settings = PluginSettings.Load(host.StorageDirectory, host.Log);
-        _client = new PixivApiClient(new RateLimiter(MinRequestInterval, MaxJitter), host.Log);
-        _sauceNaoClient = new SauceNaoClient(new RateLimiter(MinRequestInterval, MaxJitter), host.Log);
+        _client = client;
     }
 
     public ParsedAuthor? TryParseFolderName(string folderName)
@@ -84,8 +91,8 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
             _inFlight.TryRemove(key.Id, out _);
 
         var lazy = _inFlight.GetOrAdd(key.Id, _ => new Lazy<Task<AuthorInfo?>>(
-            () => FetchAndCacheAsync(key, ct)));
-        return lazy.Value;
+            () => FetchAndCacheAsync(key, CancellationToken.None)));
+        return lazy.Value.WaitAsync(ct);
     }
 
     private async Task<AuthorInfo?> FetchAndCacheAsync(AuthorKey key, CancellationToken ct)
@@ -93,23 +100,25 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
         try
         {
             var user = await _client!.FetchUserAsync(key.Id, ct).ConfigureAwait(false);
-            if (user is null)
+            if (user.Status == PixivApiClient.UserFetchStatus.NotFound)
             {
                 // Deleted/private account: negative-cache so we don't re-query
                 // a dead id every launch (the cache applies a TTL to these).
                 _cache!.Set(key.Id, new AuthorDiskCache.CachedAuthor(null, null, DateTimeOffset.UtcNow, Failed: true));
                 return null;
             }
+            if (user.Status == PixivApiClient.UserFetchStatus.SchemaError)
+                return null;
 
             string? avatarFile = null;
-            if (user.Value.AvatarUrl is { } avatarUrl && !IsDefaultAvatar(avatarUrl))
+            if (user.AvatarUrl is { } avatarUrl && !IsDefaultAvatar(avatarUrl))
             {
                 avatarFile = await _client.DownloadAvatarAsync(
                     avatarUrl, Path.Combine(_avatarDirectory, key.Id), ct).ConfigureAwait(false);
             }
 
             var entry = new AuthorDiskCache.CachedAuthor(
-                user.Value.Name, avatarFile, DateTimeOffset.UtcNow, Failed: false);
+                user.Name!, avatarFile, DateTimeOffset.UtcNow, Failed: false);
             _cache!.Set(key.Id, entry);
             return ToAuthorInfo(key, entry);
         }
@@ -249,8 +258,8 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
 
         var inFlightKey = $"{id.Id}:{saveToLocalCache}";
         var lazy = _artworkInFlight.GetOrAdd(inFlightKey, _ => new Lazy<Task<ArtworkInfo?>>(
-            () => FetchArtworkAsync(id, saveToLocalCache, ct)));
-        return lazy.Value;
+            () => FetchArtworkAsync(id, saveToLocalCache, CancellationToken.None)));
+        return lazy.Value.WaitAsync(ct);
     }
 
     private async Task<ArtworkInfo?> FetchArtworkAsync(

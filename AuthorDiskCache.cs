@@ -18,7 +18,7 @@ internal sealed class AuthorDiskCache : IDisposable
         bool Failed);
 
     private static readonly TimeSpan SaveDebounce = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan FailedEntryTtl = TimeSpan.FromDays(7);
+    private static readonly TimeSpan FailedEntryTtl = TimeSpan.FromHours(24);
 
     private readonly ConcurrentDictionary<string, CachedAuthor> _entries = new();
     private readonly string _cachePath;

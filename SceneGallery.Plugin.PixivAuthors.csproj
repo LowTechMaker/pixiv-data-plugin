@@ -9,6 +9,7 @@
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <Version>0.0.4</Version>
     <SceneGalleryAppDir Condition="'$(SceneGalleryAppDir)' == ''">$(MSBuildThisFileDirectory)..\KoikatsuSceneGallery</SceneGalleryAppDir>
+    <DefaultItemExcludes>$(DefaultItemExcludes);SceneGallery.Plugin.PixivAuthors.Tests\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup Condition="Exists('$(SceneGalleryAppDir)\PluginSdk\SceneGallery.PluginSdk.csproj')">
@@ -27,6 +28,10 @@
     <Reference Include="SceneGallery.PluginSdk" Private="false">
       <HintPath>lib\SceneGallery.PluginSdk.dll</HintPath>
     </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SceneGallery.Plugin.PixivAuthors.Tests" />
   </ItemGroup>
 
   <!--

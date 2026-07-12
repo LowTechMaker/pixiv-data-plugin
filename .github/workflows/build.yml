@@ -21,3 +21,6 @@ jobs:
 
       - name: Build
         run: dotnet build -c Release
+
+      - name: Test
+        run: dotnet test SceneGallery.Plugin.PixivAuthors.Tests/SceneGallery.Plugin.PixivAuthors.Tests.csproj -c Release -p:DeployPluginToApp=false

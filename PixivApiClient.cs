@@ -21,15 +21,38 @@ internal sealed class PixivApiClient : IDisposable
     private readonly HttpClient _http;
     private readonly RateLimiter _rateLimiter;
     private readonly Action<string> _log;
+    private readonly IReadOnlyList<TimeSpan> _retryDelays;
+
+    internal enum UserFetchStatus
+    {
+        Success,
+        NotFound,
+        SchemaError,
+    }
+
+    internal readonly record struct UserFetchResult(
+        UserFetchStatus Status,
+        string? Name = null,
+        string? AvatarUrl = null);
 
     public PixivApiClient(RateLimiter rateLimiter, Action<string> log)
-    {
-        _rateLimiter = rateLimiter;
-        _log = log;
-        _http = new HttpClient(new SocketsHttpHandler
+        : this(rateLimiter, log, new SocketsHttpHandler
         {
             AutomaticDecompression = DecompressionMethods.All,
         })
+    {
+    }
+
+    internal PixivApiClient(
+        RateLimiter rateLimiter,
+        Action<string> log,
+        HttpMessageHandler handler,
+        IReadOnlyList<TimeSpan>? retryDelays = null)
+    {
+        _rateLimiter = rateLimiter;
+        _log = log;
+        _retryDelays = retryDelays ?? RetryDelays;
+        _http = new HttpClient(handler, disposeHandler: true)
         {
             Timeout = TimeSpan.FromSeconds(30),
         };
@@ -39,35 +62,44 @@ internal sealed class PixivApiClient : IDisposable
     }
 
     /// <summary>
-    /// Fetches public profile info. Returns the parsed (name, avatarUrl), or
-    /// null with <c>notFound: true</c> when pixiv reports the user as missing
-    /// (deleted/private — cacheable), or throws on transport-level failure.
+    /// Fetches public profile info and classifies the response as success,
+    /// confirmed not-found, or schema error. Transport-level failures throw.
     /// </summary>
-    public async Task<(string Name, string? AvatarUrl)?> FetchUserAsync(
+    public async Task<UserFetchResult> FetchUserAsync(
         string userId, CancellationToken ct)
     {
         var url = $"https://www.pixiv.net/ajax/user/{userId}?full=1&lang=en";
         using var response = await SendWithRetryAsync(url, "application/json", ct).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
-            return null;
+            return new UserFetchResult(UserFetchStatus.NotFound);
         response.EnsureSuccessStatusCode();
 
-        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        var rawResponse = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         // The response shape is unofficial and drifts; probe with JsonDocument
         // instead of binding a model so unrelated changes don't break parsing.
-        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false);
+        using var doc = JsonDocument.Parse(rawResponse);
         var root = doc.RootElement;
 
         if (root.TryGetProperty("error", out var error) && error.GetBoolean())
         {
-            _log($"pixiv user {userId}: API returned error=true");
-            return null;
+            if (IsExplicitNotFound(root))
+                return new UserFetchResult(UserFetchStatus.NotFound);
+
+            LogSchemaError(userId, "API returned error=true without a confirmed not-found message", rawResponse);
+            return new UserFetchResult(UserFetchStatus.SchemaError);
         }
         if (!root.TryGetProperty("body", out var body) || body.ValueKind != JsonValueKind.Object)
-            return null;
+        {
+            LogSchemaError(userId, "response is missing an object body", rawResponse);
+            return new UserFetchResult(UserFetchStatus.SchemaError);
+        }
 
         var name = body.TryGetProperty("name", out var n) ? n.GetString() : null;
-        if (string.IsNullOrWhiteSpace(name)) return null;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            LogSchemaError(userId, "response body is missing name", rawResponse);
+            return new UserFetchResult(UserFetchStatus.SchemaError);
+        }
 
         string? avatarUrl = null;
         if (body.TryGetProperty("imageBig", out var img) && img.ValueKind == JsonValueKind.String)
@@ -75,7 +107,29 @@ internal sealed class PixivApiClient : IDisposable
         else if (body.TryGetProperty("image", out var imgSmall) && imgSmall.ValueKind == JsonValueKind.String)
             avatarUrl = imgSmall.GetString();
 
-        return (name!, avatarUrl);
+        return new UserFetchResult(UserFetchStatus.Success, name, avatarUrl);
+    }
+
+    private static bool IsExplicitNotFound(JsonElement root)
+    {
+        if (!root.TryGetProperty("message", out var messageElement)
+            || messageElement.ValueKind != JsonValueKind.String)
+            return false;
+
+        var message = messageElement.GetString() ?? "";
+        return message.Contains("not found", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("does not exist", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("存在しません", StringComparison.Ordinal)
+               || message.Contains("不存在", StringComparison.Ordinal);
+    }
+
+    private void LogSchemaError(string userId, string reason, string rawResponse)
+    {
+        const int maxSummaryLength = 500;
+        var summary = rawResponse.Length <= maxSummaryLength
+            ? rawResponse
+            : rawResponse[..maxSummaryLength];
+        _log($"warning: pixiv user {userId} schema error ({reason}); response: {summary}");
     }
 
     internal readonly record struct PixivArtworkData(
@@ -201,13 +255,13 @@ internal sealed class PixivApiClient : IDisposable
 
                 var transient = response.StatusCode == HttpStatusCode.TooManyRequests
                                 || (int)response.StatusCode >= 500;
-                if (!transient || attempt >= RetryDelays.Length)
+                if (!transient || attempt >= _retryDelays.Count)
                     return response;
 
-                _log($"pixiv returned {(int)response.StatusCode}, retrying in {RetryDelays[attempt].TotalSeconds}s: {url}");
+                _log($"pixiv returned {(int)response.StatusCode}, retrying in {_retryDelays[attempt].TotalSeconds}s: {url}");
                 response.Dispose();
             }
-            await Task.Delay(RetryDelays[attempt], ct).ConfigureAwait(false);
+            await Task.Delay(_retryDelays[attempt], ct).ConfigureAwait(false);
         }
     }
 
