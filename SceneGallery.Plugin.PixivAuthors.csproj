@@ -36,10 +36,11 @@
   -->
   <PropertyGroup>
     <AppRid Condition="'$(AppRid)' == ''">win-x64</AppRid>
+    <DeployPluginToApp Condition="'$(DeployPluginToApp)' == ''">true</DeployPluginToApp>
     <AppPluginsDir>$(SceneGalleryAppDir)\bin\$(Configuration)\net10.0-windows10.0.26100.0\$(AppRid)\Plugins\PixivAuthors</AppPluginsDir>
   </PropertyGroup>
 
-  <Target Name="CopyToAppPlugins" AfterTargets="Build" Condition="Exists('$(SceneGalleryAppDir)')">
+  <Target Name="CopyToAppPlugins" AfterTargets="Build" Condition="'$(DeployPluginToApp)' == 'true' and Exists('$(SceneGalleryAppDir)')">
     <Message Text="Plugin (folder) → $(AppPluginsDir)" Importance="high" />
     <ItemGroup>
       <_PluginFiles Include="$(OutDir)**\*" Exclude="$(OutDir)**\SceneGallery.PluginSdk.*" />
@@ -55,7 +56,7 @@
     <AppPluginsRoot>$(SceneGalleryAppDir)\bin\$(Configuration)\net10.0-windows10.0.26100.0\$(AppRid)\Plugins</AppPluginsRoot>
   </PropertyGroup>
 
-  <Target Name="CopySingleFilePlugin" AfterTargets="Build" Condition="Exists('$(SceneGalleryAppDir)')">
+  <Target Name="CopySingleFilePlugin" AfterTargets="Build" Condition="'$(DeployPluginToApp)' == 'true' and Exists('$(SceneGalleryAppDir)')">
     <Message Text="Plugin (single) → $(AppPluginsRoot)\$(AssemblyName).dll" Importance="high" />
     <Copy
       SourceFiles="$(OutDir)$(AssemblyName).dll"
