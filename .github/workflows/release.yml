@@ -30,10 +30,28 @@ jobs:
         shell: pwsh
         run: |
           $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
+          $tag = $tag.Trim()
+          $version = if ($tag.StartsWith("v", [StringComparison]::OrdinalIgnoreCase)) { $tag.Substring(1) } else { $tag }
+          $semVerPattern = '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
+          if ($version -notmatch $semVerPattern) {
+            Write-Error "Invalid release tag '$tag': expected a SemVer value such as v1.2.3 or 1.2.3."
+            exit 1
+          }
           "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Build
-        run: dotnet build -c Release
+        run: dotnet build -c Release -p:Version="${{ steps.version.outputs.version }}" -p:IncludeSourceRevisionInInformationalVersion=false -p:DeployPluginToApp=false
+
+      - name: Package release asset
+        id: asset
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $source = "bin/Release/net10.0-windows10.0.26100.0/SceneGallery.Plugin.PixivAuthors.dll"
+          $asset = "bin/Release/net10.0-windows10.0.26100.0/SceneGallery.Plugin.PixivAuthors-$version.dll"
+          Copy-Item -LiteralPath $source -Destination $asset
+          "path=$asset" >> $env:GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -41,4 +59,4 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
-          files: "bin/Release/net10.0-windows10.0.26100.0/SceneGallery.Plugin.PixivAuthors.dll"
+          files: ${{ steps.asset.outputs.path }}
