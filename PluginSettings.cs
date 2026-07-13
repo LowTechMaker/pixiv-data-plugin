@@ -24,7 +24,17 @@ internal sealed class PluginSettings
             if (File.Exists(path))
             {
                 var json = File.ReadAllText(path);
-                return JsonSerializer.Deserialize<PluginSettings>(json, JsonOptions) ?? new();
+                var document = JsonSerializer.Deserialize<SettingsDocument>(json, JsonOptions) ?? new();
+                return new PluginSettings
+                {
+                    DestinationFolderName = document.DestinationFolderName,
+                    UsesRatingFolders = document.UsesRatingFolders,
+                    SauceNaoApiKey = DpapiSecretProtector.Unprotect(
+                        document.SauceNaoApiKey,
+                        "sauceNaoApiKey",
+                        log,
+                        out _),
+                };
             }
         }
         catch (Exception ex)
@@ -43,7 +53,13 @@ internal sealed class PluginSettings
         try
         {
             var tempPath = path + ".tmp";
-            File.WriteAllText(tempPath, JsonSerializer.Serialize(this, JsonOptions));
+            var document = new SettingsDocument
+            {
+                DestinationFolderName = DestinationFolderName,
+                UsesRatingFolders = UsesRatingFolders,
+                SauceNaoApiKey = DpapiSecretProtector.Protect(SauceNaoApiKey),
+            };
+            File.WriteAllText(tempPath, JsonSerializer.Serialize(document, JsonOptions));
             File.Move(tempPath, path, overwrite: true);
         }
         catch (Exception ex)
@@ -54,4 +70,11 @@ internal sealed class PluginSettings
 
     private static string GetPath(string storageDirectory)
         => Path.Combine(storageDirectory, "settings.json");
+
+    private sealed class SettingsDocument
+    {
+        public string DestinationFolderName { get; set; } = "Pixiv";
+        public bool UsesRatingFolders { get; set; } = true;
+        public string? SauceNaoApiKey { get; set; }
+    }
 }
