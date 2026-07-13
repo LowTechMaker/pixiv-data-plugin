@@ -18,6 +18,8 @@ internal sealed class AuthorDiskCache : IDisposable
         bool Failed);
 
     private static readonly TimeSpan SaveDebounce = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan InitialRetryDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan FailedEntryTtl = TimeSpan.FromHours(24);
 
     private readonly ConcurrentDictionary<string, CachedAuthor> _entries = new();
@@ -25,12 +27,25 @@ internal sealed class AuthorDiskCache : IDisposable
     private readonly Action<string> _log;
     private readonly Timer _saveTimer;
     private readonly Lock _saveLock = new();
-    private volatile bool _dirty;
+    private readonly Action<string, Action<Stream>> _writeAtomically;
+    private bool _dirty;
+    private bool _disposed;
+    private long _generation;
+    private TimeSpan _retryDelay;
 
     public AuthorDiskCache(string storageDirectory, Action<string> log)
+        : this(storageDirectory, log, WriteAtomically)
+    {
+    }
+
+    internal AuthorDiskCache(
+        string storageDirectory,
+        Action<string> log,
+        Action<string, Action<Stream>> writeAtomically)
     {
         _cachePath = Path.Combine(storageDirectory, "authors.json");
         _log = log;
+        _writeAtomically = writeAtomically;
         _saveTimer = new Timer(_ => Flush(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         Load();
     }
@@ -49,8 +64,25 @@ internal sealed class AuthorDiskCache : IDisposable
     public void Set(string id, CachedAuthor entry)
     {
         _entries[id] = entry;
-        _dirty = true;
-        _saveTimer.Change(SaveDebounce, Timeout.InfiniteTimeSpan);
+        MarkDirty();
+    }
+
+    internal bool IsDirty
+    {
+        get
+        {
+            lock (_saveLock)
+                return _dirty;
+        }
+    }
+
+    internal TimeSpan RetryDelay
+    {
+        get
+        {
+            lock (_saveLock)
+                return _retryDelay;
+        }
     }
 
     private void Load()
@@ -70,29 +102,72 @@ internal sealed class AuthorDiskCache : IDisposable
         }
     }
 
-    private void Flush()
+    private void MarkDirty()
     {
-        if (!_dirty) return;
-        _dirty = false;
-        try
+        Interlocked.Increment(ref _generation);
+        lock (_saveLock)
         {
-            lock (_saveLock)
+            _dirty = true;
+            ScheduleFlush(SaveDebounce);
+        }
+    }
+
+    internal void Flush()
+    {
+        lock (_saveLock)
+        {
+            if (!_dirty) return;
+
+            var generation = Volatile.Read(ref _generation);
+            try
             {
-                var tempPath = _cachePath + ".tmp";
-                using (var stream = File.Create(tempPath))
-                    JsonSerializer.Serialize(stream, _entries);
-                File.Move(tempPath, _cachePath, overwrite: true);
+                _writeAtomically(_cachePath, stream => JsonSerializer.Serialize(stream, _entries));
+                _retryDelay = TimeSpan.Zero;
+                if (generation == Volatile.Read(ref _generation))
+                {
+                    _dirty = false;
+                }
+                else
+                {
+                    _dirty = true;
+                    ScheduleFlush(SaveDebounce);
+                }
+            }
+            catch (Exception ex)
+            {
+                _dirty = true;
+                _retryDelay = _retryDelay == TimeSpan.Zero
+                    ? InitialRetryDelay
+                    : TimeSpan.FromTicks(Math.Min(_retryDelay.Ticks * 2, MaxRetryDelay.Ticks));
+                ScheduleFlush(_retryDelay);
+                _log($"author cache save failed: {ex.Message}");
             }
         }
-        catch (Exception ex)
-        {
-            _log($"author cache save failed: {ex.Message}");
-        }
+    }
+
+    private void ScheduleFlush(TimeSpan delay)
+    {
+        if (!_disposed)
+            _saveTimer.Change(delay, Timeout.InfiniteTimeSpan);
+    }
+
+    private static void WriteAtomically(string path, Action<Stream> serialize)
+    {
+        var tempPath = path + ".tmp";
+        using (var stream = File.Create(tempPath))
+            serialize(stream);
+        File.Move(tempPath, path, overwrite: true);
     }
 
     public void Dispose()
     {
-        _saveTimer.Dispose();
+        lock (_saveLock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _saveTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        }
         Flush();
+        _saveTimer.Dispose();
     }
 }
