@@ -13,12 +13,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.9" />
+    <PackageReference Include="SceneGallery.PluginCommon" Version="0.1.0" PrivateAssets="all" />
+    <PackageReference Include="SceneGallery.PluginCommon.Secrets" Version="0.1.0" PrivateAssets="all" />
     <PackageReference Include="SceneGallery.PluginSdk" Version="1.0.0" ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="SceneGallery.Plugin.PixivAuthors.Tests" />
+    <Using Include="SceneGallery.PluginCommon" />
   </ItemGroup>
 
   <!--

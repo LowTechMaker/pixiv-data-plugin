@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Using Include="SceneGallery.PluginCommon" />
     <Using Include="Xunit" />
   </ItemGroup>
 
