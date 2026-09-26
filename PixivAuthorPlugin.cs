@@ -11,14 +11,13 @@ namespace SceneGallery.Plugin.PixivAuthors;
 /// Anonymous web requests only (no account); rate-limited and disk-cached so
 /// each author is fetched at most once until a forced refresh.
 /// </summary>
-public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvider, IImportDestinationProvider, IReverseImageSearchProvider, IPluginSettingsProvider, IDisposable
+public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvider, IArtworkMetadataRefresher, IImportDestinationProvider, IReverseImageSearchProvider, IPluginSettingsProvider, ITagDictionaryProvider, IDisposable
 {
     private static readonly TimeSpan MinRequestInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan MaxJitter = TimeSpan.FromSeconds(3);
 
     private IPluginHost? _host;
-    private PixivFetchCoordinator? _fetchCoordinator;
-    private SauceNaoClient? _sauceNaoClient;
+    private PixivRuntime? _runtime;
     private PluginSettings? _settings;
 
     public string Name => "Pixiv Authors";
@@ -50,14 +49,15 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
     {
         InitializeForTests(
             host,
-            new PixivApiClient(new RateLimiter(MinRequestInterval, MaxJitter), host.Log));
-        _sauceNaoClient = new SauceNaoClient(new RateLimiter(MinRequestInterval, MaxJitter), host.Log);
+            new PixivApiClient(new RateLimiter(MinRequestInterval, MaxJitter), host.Log),
+            new SauceNaoClient(new RateLimiter(MinRequestInterval, MaxJitter), host.Log));
     }
 
-    internal void InitializeForTests(IPluginHost host, PixivApiClient client)
+    internal void InitializeForTests(IPluginHost host, PixivApiClient client, SauceNaoClient? sauceNao = null, TimeSpan? disposeTimeout = null,
+        Func<Task>? beforePreviewPromotion = null)
     {
         _host = host;
-        _fetchCoordinator = new PixivFetchCoordinator(host.StorageDirectory, host.Log, client);
+        _runtime = new PixivRuntime(host, client, sauceNao, disposeTimeout, beforePreviewPromotion);
         _settings = PluginSettings.Load(host.StorageDirectory, host.Log);
     }
 
@@ -67,8 +67,16 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
     public string GetProfileUrl(AuthorKey key) => PixivFetchCoordinator.GetProfileUrl(key);
 
     public Task<AuthorInfo?> GetAuthorInfoAsync(AuthorKey key, bool forceRefresh, CancellationToken ct)
-        => _fetchCoordinator?.GetAuthorInfoAsync(key, forceRefresh, ct)
+        => _runtime?.Fetches.GetAuthorInfoAsync(key, forceRefresh, ct)
            ?? Task.FromResult<AuthorInfo?>(null);
+
+    // ── ITagDictionaryProvider ───────────────────────────────────────
+
+    public Task<TagArticle?> FetchTagAsync(string tag, string language, CancellationToken ct)
+        => _runtime?.FetchTagAsync(tag, language, ct) ?? Task.FromResult<TagArticle?>(null);
+
+    public TagArticle? TryGetCached(string tag, string language)
+        => _runtime?.Tags.TryGetCached(tag, language);
 
     // ── ICardImportProvider ──────────────────────────────────────────
 
@@ -88,7 +96,7 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
 
     public void SetSettingValue(string key, string? value)
     {
-        if (_host is null || _settings is null)
+        if (_host is null || _settings is null || _runtime?.IsDisposing == true)
             return;
 
         switch (key)
@@ -122,51 +130,25 @@ public sealed class PixivAuthorPlugin : IFolderAuthorProvider, ICardImportProvid
 
     public string GetArtworkUrl(ArtworkId id) => $"https://www.pixiv.net/artworks/{id.Id}";
 
-    public async Task<ReverseImageSearchResult?> SearchImageAsync(
+    public Task<ReverseImageSearchResult?> SearchImageAsync(
         string imagePath,
         string apiKey,
         CancellationToken ct)
-    {
-        if (_sauceNaoClient is null)
-            return null;
-
-        try
-        {
-            var result = await _sauceNaoClient.SearchPixivAsync(imagePath, apiKey, ct).ConfigureAwait(false);
-            if (result is null)
-                return null;
-
-            return new ReverseImageSearchResult(
-                "SauceNao",
-                new ArtworkId(ProviderId, result.PixivId),
-                result.Title,
-                result.AuthorName,
-                result.AuthorId,
-                result.Similarity,
-                result.ThumbnailUrl,
-                result.SourceUrl);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _host?.Log($"SauceNao search failed for {Path.GetFileName(imagePath)}: {ex.Message}");
-            return null;
-        }
-    }
+        => _runtime?.SearchImageAsync(imagePath, apiKey, ct)
+           ?? Task.FromResult<ReverseImageSearchResult?>(null);
 
     public Task<ArtworkInfo?> FetchArtworkInfoAsync(
         ArtworkId id,
         CancellationToken ct,
         bool saveToLocalCache = true)
-        => _fetchCoordinator?.FetchArtworkInfoAsync(id, ct, saveToLocalCache)
+        => _runtime?.Fetches.FetchArtworkInfoAsync(id, ct, saveToLocalCache)
            ?? Task.FromResult<ArtworkInfo?>(null);
 
-    public void Dispose()
-    {
-        _fetchCoordinator?.Dispose();
-        _sauceNaoClient?.Dispose();
-    }
+    public Task<ArtworkRefreshResult> RefreshArtworkAsync(ArtworkId id, CancellationToken ct)
+        => _runtime?.Fetches.RefreshArtworkAsync(id, ct)
+           ?? Task.FromResult(ArtworkRefreshResult.Failed);
+
+    internal Task DisposalCompletion => _runtime?.Completion ?? Task.CompletedTask;
+
+    public void Dispose() => _runtime?.Dispose();
 }

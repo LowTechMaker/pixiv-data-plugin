@@ -43,8 +43,9 @@ jobs:
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Build
-        run: dotnet build -c Release -p:Version="${{ steps.version.outputs.version }}" -p:IncludeSourceRevisionInInformationalVersion=false -p:DeployPluginToApp=false
+      - name: Verify release candidate
+        shell: pwsh
+        run: ./eng/Verify-Plugin.ps1 -Version "${{ steps.version.outputs.version }}"
 
       - name: Package release asset
         id: asset

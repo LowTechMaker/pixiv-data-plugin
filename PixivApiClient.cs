@@ -141,13 +141,22 @@ internal sealed class PixivApiClient : IDisposable
         IReadOnlyList<(string Tag, string? Translation)> Tags);
 
     /// <summary>
-    /// Fetches public artwork info. Returns parsed data, or null when pixiv
-    /// reports the artwork as missing (deleted/private — cacheable).
+    /// Fetches public artwork info. Returns parsed data, or null only when
+    /// pixiv says the artwork is not there (404, or <c>error: true</c>:
+    /// deleted or private). Anything else that goes wrong — transport, an
+    /// error status, a body that cannot be read — throws, so a caller can tell
+    /// "gone for good" from "try again later".
     /// </summary>
+    /// <param name="pixivLanguage">
+    /// A pixiv language code (see <see cref="PixivTagLanguage"/>). It decides
+    /// the language of every tag translation in the answer — which pixiv still
+    /// files under the key "en" whatever the language asked for, so the parse
+    /// below does not change with it.
+    /// </param>
     public async Task<PixivArtworkData?> FetchArtworkAsync(
-        string artworkId, CancellationToken ct)
+        string artworkId, string pixivLanguage, CancellationToken ct)
     {
-        var url = $"https://www.pixiv.net/ajax/illust/{artworkId}?lang=en";
+        var url = $"https://www.pixiv.net/ajax/illust/{artworkId}?lang={Uri.EscapeDataString(pixivLanguage)}";
         using var response = await SendWithRetryAsync(url, "application/json", ct).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;
@@ -163,12 +172,12 @@ internal sealed class PixivApiClient : IDisposable
             return null;
         }
         if (!root.TryGetProperty("body", out var body) || body.ValueKind != JsonValueKind.Object)
-            return null;
+            throw new InvalidDataException($"pixiv artwork {artworkId}: response has no body object");
 
         var userId = body.TryGetProperty("userId", out var uid) ? uid.GetString() : null;
         var userName = body.TryGetProperty("userName", out var un) ? un.GetString() : null;
         if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(userName))
-            return null;
+            throw new InvalidDataException($"pixiv artwork {artworkId}: response has no author");
 
         string? title = body.TryGetProperty("title", out var t) && t.ValueKind == JsonValueKind.String
             ? t.GetString() : null;
@@ -206,12 +215,12 @@ internal sealed class PixivApiClient : IDisposable
     }
 
     /// <summary>
-    /// Downloads an avatar to <paramref name="destinationPath"/> (extension is
-    /// appended from the URL). Writes via a temp file + move so a half-written
-    /// image is never visible to the app. Returns the final path, or null when
+    /// Stages an avatar beside its final destination (extension is appended
+    /// from the URL). The coordinator owns generation-guarded publication.
+    /// Returns a disposable staging file, or null when
     /// the download fails in a non-retryable way (e.g. image gone).
     /// </summary>
-    public async Task<string?> DownloadAvatarAsync(
+    public async Task<PixivAvatarDownload?> StageAvatarAsync(
         string avatarUrl, string destinationPathWithoutExtension, CancellationToken ct)
     {
         var extension = Path.GetExtension(new Uri(avatarUrl).AbsolutePath);
@@ -226,19 +235,33 @@ internal sealed class PixivApiClient : IDisposable
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
-        var tempPath = finalPath + ".tmp";
+        var tempPath = finalPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             await using (var file = File.Create(tempPath))
                 await response.Content.CopyToAsync(file, ct).ConfigureAwait(false);
-            File.Move(tempPath, finalPath, overwrite: true);
+            return new PixivAvatarDownload(tempPath, finalPath);
         }
-        finally
+        catch
         {
             if (File.Exists(tempPath))
                 try { File.Delete(tempPath); } catch { /* best effort */ }
+            throw;
         }
-        return finalPath;
+    }
+
+    /// <summary>
+    /// Fetches the tag search payload, which carries both the encyclopedia
+    /// entry and the translations. Returns null when pixiv says it has no such
+    /// tag; transport-level failures throw, as elsewhere in this client.
+    /// </summary>
+    public async Task<string?> FetchTagJsonAsync(string tag, string pixivLanguage, CancellationToken ct)
+    {
+        var url = $"https://www.pixiv.net/ajax/search/tags/{Uri.EscapeDataString(tag)}?lang={pixivLanguage}";
+        using var response = await SendWithRetryAsync(url, "application/json", ct).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
     }
 
     private async Task<HttpResponseMessage> SendWithRetryAsync(
