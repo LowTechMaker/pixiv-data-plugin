@@ -49,3 +49,9 @@ Build／Release workflow 均執行同一個 gate。release 使用同一個版本
 ## 2026-09-27 發布候選驗證
 
 遠端既有最新 release/tag 為 `0.0.5`，且 `origin/master` 已納入原有 `agent/pixiv-fetch-coordinator` commit；本次候選版為 `v0.0.6`。以正式注入版本 `0.0.6`、SDK `1.3.0`、Common/Secrets `0.2.0` 及明確的本機 NuGet feed 執行 `eng/Verify-Plugin.ps1`，**125/125 通過**，並通過組件／套件邊界、發佈輸出及文件連結檢查。測試輸出位於此 checkout 的 `bin/release-validation/artifacts`（Git 忽略）。編譯採 `UseSharedCompilation=false` 避免沙箱外的 Roslyn shared compiler 無法寫入隔離輸出；`NuGetAudit=false` 僅用於無法連線 nuget.org 的本機環境，不代表已完成遠端套件安全稽核。這項驗證使用本機套件來源，官方 GitHub Packages 還原及遠端 Release workflow 須在依賴套件發佈後另行確認。
+
+## 2026-09-27 遠端發版結果
+
+- 來源 commit `cd0c0a710fc50d3e5153ed4c71e1b83615a955ed` 已快進至 `master`；[Build CI](https://github.com/LowTechMaker/pixiv-data-plugin/actions/runs/36270005031) 在 repo 正式 NuGet.config／GitHub Packages 設定下通過完整 gate。標註式 tag `v0.0.6` 指向該 commit；[Release CI](https://github.com/LowTechMaker/pixiv-data-plugin/actions/runs/36270118308) 的驗證、打包與發佈步驟均通過。
+- [GitHub Release v0.0.6](https://github.com/LowTechMaker/pixiv-data-plugin/releases/tag/v0.0.6) 提供 `SceneGallery.Plugin.PixivAuthors-0.0.6.dll`；下載後 SHA256 為 `fefb1df1df86125eff086853a0c4dd909d95c444f88c8910aa35aec27b8444a8`，符合 GitHub asset digest，組件版本為 `0.0.6.0`。以公開宿主 v0.4.0 正式 ZIP 內的 SDK DLL 做獨立載入測試，plugin type、`IArtworkMetadataRefresher`、`ITagDictionaryProvider` 等所有介面均可解析。舊宿主 v0.3.0 的 SDK 缺少相關型別，不能載入此版；使用者應搭配 v0.4.0 或更新宿主。
+- 本段遠端結果記錄於 tag 發佈後的文件提交；tag 仍指向已由 Release CI 驗證的來源。真實 Pixiv/SauceNao 網路、tag endpoint、host UI 及語言切換仍屬前節列出的人工驗證範圍。
